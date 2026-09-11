@@ -1,0 +1,26 @@
+[project]
+name = "local-ai-agent-with-rag"
+version = "0.1.0"
+description = "Local restaurant-ops agent with RAG tools using LangChain v1 and Ollama"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "langchain>=1.4.0,<2.0.0",
+    "langchain-chroma>=1.1.0,<2.0.0",
+    "langchain-ollama>=1.1.0,<2.0.0",
+    "pandas>=2.2.0,<4.0.0",
+    "streamlit>=1.40.0",
+    "httpx>=0.27.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+restaurant-agent = "main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
