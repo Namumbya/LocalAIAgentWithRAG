@@ -103,15 +103,6 @@ Summarize the rating distribution
 Draft an owner reply about late delivery issues
 ```
 
-## Why this is an agent (not plain RAG)
-
-| Question | Plain RAG | This agent |
-| --- | --- | --- |
-| "Hi" | Always retrieves reviews | Answers directly |
-| "Is vegan pizza good?" | Always retrieves top-k | Calls `search_reviews` |
-| "Show 1-star complaints" | Similarity search only | Calls `filter_reviews_by_rating` |
-| "What's the average rating?" | Hopes retrieval helps | Calls `get_rating_stats` |
-
 ## Stack
 
 - LangChain `1.x` (`create_agent`, `@tool`)
@@ -119,11 +110,3 @@ Draft an owner reply about late delivery issues
 - `langchain-chroma` (persistent local vector store)
 - Streamlit (chat UI)
 - pandas (CSV + rating filters)
-
-## Notes
-
-- Keep Ollama running in the background while you chat.
-- Low on disk? Stick to the `:3b` + `nomic-embed-text` defaults. Remove unused models with `ollama rm <name>`.
-- If the model ignores tools, try a larger tool-capable model when you have space.
-- Delete `chroma_langchain_db/` if you change the CSV or embedding model and want a fresh index.
-- This is a portfolio/demo project. Swap the CSV for your own docs to reuse the same pattern.
