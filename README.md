@@ -6,8 +6,6 @@ Unlike a basic retrieve-then-answer RAG script, this project is an **agent**: th
 
 Everything runs on your machine. No cloud LLM API keys required.
 
-![Chat UI drafting an owner reply after searching reviews](docs/screenshot.png)
-
 ## What it solves
 
 **Problem:** A pizza restaurant owner has a pile of customer reviews and wants quick answers like:
