@@ -6,6 +6,8 @@ Unlike a basic retrieve-then-answer RAG script, this project is an **agent**: th
 
 Everything runs on your machine. No cloud LLM API keys required.
 
+![Chat UI drafting an owner reply after searching reviews](docs/screenshot.png)
+
 ## What it solves
 
 **Problem:** A pizza restaurant owner has a pile of customer reviews and wants quick answers like:
@@ -60,7 +62,7 @@ If you have more space and want stronger tool calling, use `qwen2.5` and `mxbai-
 ## Setup
 
 ```bash
-git clone https://github.com/<your-username>/LocalAIAgentWithRAG.git
+git clone https://github.com/Namumbya/LocalAIAgentWithRAG.git
 cd LocalAIAgentWithRAG
 
 uv sync
