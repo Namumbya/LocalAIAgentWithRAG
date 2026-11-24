@@ -1,11 +1,16 @@
-"""CLI entrypoint for the local restaurant RAG agent."""
+"""CLI entrypoint for the local agentic RAG demo."""
 
 from __future__ import annotations
 
-from agent import CHAT_MODEL, OllamaNotAvailableError, build_agent, check_ollama, run_turn
+from agent import OllamaNotAvailableError, build_agent, check_ollama, run_turn
+from constants import CHAT_MODEL
+from logging_setup import get_logger, setup_logging
+
+logger = get_logger(__name__)
 
 
 def main() -> None:
+    setup_logging()
     try:
         check_ollama()
     except OllamaNotAvailableError as exc:
@@ -13,11 +18,15 @@ def main() -> None:
         return
 
     agent = build_agent()
-    messages: list = []
+    messages: list[object] = []
 
-    print("Local Restaurant Agent (RAG + tools)")
+    print("Local AI Agent with RAG (tools + reviews)")
     print(f"Model: {CHAT_MODEL}")
-    print("Ask about reviews, complaints, or draft owner replies. Type q to quit.\n")
+    print(
+        "Ask about the sample reviews, complaints, or draft owner replies. "
+        "Type q to quit.\n"
+    )
+    logger.info("CLI agent ready")
 
     while True:
         question = input("You: ").strip()

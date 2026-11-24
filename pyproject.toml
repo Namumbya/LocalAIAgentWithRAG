@@ -1,7 +1,7 @@
 [project]
 name = "local-ai-agent-with-rag"
 version = "0.1.0"
-description = "Local restaurant-ops agent with RAG tools using LangChain v1 and Ollama"
+description = "Local agentic RAG demo with LangChain v1 tools and Ollama (sample: restaurant reviews)"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -16,6 +16,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "ruff>=0.9.0",
+    "mypy>=1.14.0",
 ]
 
 [project.scripts]
@@ -24,3 +26,25 @@ restaurant-agent = "main:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = [
+    "constants.py",
+    "logging_setup.py",
+    "agent.py",
+    "vector.py",
+    "tools.py",
+    "main.py",
+]

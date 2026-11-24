@@ -28,7 +28,7 @@ def test_build_agent_wires_tools(monkeypatch):
 
     assert built is not None
     assert captured["model"] == "qwen2.5:3b"
-    assert captured["temperature"] == 0
+    assert captured["temperature"] == 0.0
     assert captured["agent_model"] is fake_model
     assert len(captured["tools"]) == 3
     assert "search_reviews" in captured["system_prompt"]
@@ -85,7 +85,7 @@ def test_check_ollama_raises_clear_error(monkeypatch):
 
     try:
         agent.check_ollama()
-        assert False, "expected OllamaNotAvailableError"
+        raise AssertionError("expected OllamaNotAvailableError")
     except agent.OllamaNotAvailableError as exc:
         assert "Cannot reach Ollama" in str(exc)
 

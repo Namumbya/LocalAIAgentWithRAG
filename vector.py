@@ -1,27 +1,43 @@
-"""Build and load a local Chroma vector store from restaurant reviews."""
+"""Build and load a local Chroma vector store from review CSV rows."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 
-BASE_DIR = Path(__file__).resolve().parent
-CSV_PATH = BASE_DIR / "realistic_restaurant_reviews.csv"
-DB_LOCATION = BASE_DIR / "chroma_langchain_db"
-COLLECTION_NAME = "restaurant_reviews"
-EMBEDDING_MODEL = "nomic-embed-text"
+from constants import (
+    COLLECTION_NAME,
+    CSV_PATH,
+    DB_LOCATION,
+    DEFAULT_RETRIEVER_K,
+    EMBEDDING_MODEL,
+    REQUIRED_CSV_COLUMNS,
+)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 _df: pd.DataFrame | None = None
-_retriever = None
+_retriever: Any = None
+_retriever_k: int = DEFAULT_RETRIEVER_K
 
 
 def load_reviews(csv_path: Path | str = CSV_PATH) -> pd.DataFrame:
-    """Load the restaurant reviews CSV."""
-    return pd.read_csv(csv_path)
+    """Load a reviews CSV and validate the expected columns."""
+    reviews = pd.read_csv(csv_path)
+    missing = [col for col in REQUIRED_CSV_COLUMNS if col not in reviews.columns]
+    if missing:
+        raise ValueError(
+            "CSV is missing required columns: "
+            f"{missing}. Expected {list(REQUIRED_CSV_COLUMNS)}."
+        )
+    return reviews
 
 
 def documents_from_df(reviews: pd.DataFrame) -> tuple[list[Document], list[str]]:
@@ -52,7 +68,7 @@ def build_vector_store(
     persist_directory: Path | str = DB_LOCATION,
     embedding_model: str = EMBEDDING_MODEL,
     collection_name: str = COLLECTION_NAME,
-):
+) -> Chroma:
     """Create or load a Chroma store and index reviews when empty."""
     reviews = reviews if reviews is not None else load_reviews()
     embeddings = OllamaEmbeddings(model=embedding_model)
@@ -71,11 +87,16 @@ def build_vector_store(
         try:
             vector_store.add_documents(documents=documents, ids=ids)
         except Exception as exc:
+            logger.exception("Failed to index reviews into %s", persist_directory)
             raise RuntimeError(
                 "Could not index reviews. Is Ollama running, and have you pulled "
                 f"`{embedding_model}`? Error: {exc}"
             ) from exc
-        print(f"Indexed {len(documents)} reviews into {persist_directory.name}")
+        logger.info(
+            "Indexed %s reviews into %s",
+            len(documents),
+            persist_directory.name,
+        )
 
     return vector_store
 
@@ -85,13 +106,42 @@ def get_df() -> pd.DataFrame:
     global _df
     if _df is None:
         _df = load_reviews()
+        logger.info("Loaded %s reviews from %s", len(_df), CSV_PATH.name)
     return _df
 
 
-def get_retriever(k: int = 5):
+def set_retriever_k(k: int) -> None:
+    """Update retriever top-k; rebuilds on next get_retriever() if changed."""
+    global _retriever, _retriever_k
+    if k < 1:
+        raise ValueError("retriever k must be >= 1")
+    if k != _retriever_k:
+        logger.info("Retriever k changed %s -> %s", _retriever_k, k)
+        _retriever = None
+        _retriever_k = k
+
+
+def get_retriever(k: int | None = None) -> Any:
     """Lazy-loaded retriever used by tools."""
-    global _retriever
+    global _retriever, _retriever_k
+    if k is not None and k != _retriever_k:
+        set_retriever_k(k)
     if _retriever is None:
         vector_store = build_vector_store(get_df())
-        _retriever = vector_store.as_retriever(search_kwargs={"k": k})
+        _retriever = vector_store.as_retriever(
+            search_kwargs={"k": _retriever_k}
+        )
+        logger.info("Built retriever with k=%s", _retriever_k)
     return _retriever
+
+
+def reset_vector_store() -> None:
+    """Delete the persisted Chroma DB and clear in-memory caches."""
+    global _df, _retriever
+    _df = None
+    _retriever = None
+    if DB_LOCATION.exists():
+        shutil.rmtree(DB_LOCATION)
+        logger.info("Deleted vector store at %s", DB_LOCATION)
+    else:
+        logger.info("No vector store directory to delete at %s", DB_LOCATION)

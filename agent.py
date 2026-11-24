@@ -8,13 +8,20 @@ import httpx
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
 
+from constants import (
+    CHAT_MODEL,
+    DEFAULT_TEMPERATURE,
+    EMBEDDING_MODEL,
+    OLLAMA_BASE_URL,
+)
+from logging_setup import get_logger
 from tools import filter_reviews_by_rating, get_rating_stats, search_reviews
 
-# Smaller defaults to save disk (~2–3 GB total). Use qwen2.5 / mxbai-embed-large if you have space.
-CHAT_MODEL = "qwen2.5:3b"
-OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+logger = get_logger(__name__)
 
-SYSTEM_PROMPT = """You are a local restaurant operations assistant for a pizza place.
+SYSTEM_PROMPT = """You are a local customer-review operations assistant.
+The sample dataset is pizza restaurant reviews, but answer from whatever
+reviews are indexed.
 
 Tools:
 - search_reviews(query): find reviews about a topic (delivery, crust, vegan, BBQ, noise, etc.)
@@ -60,17 +67,26 @@ def check_ollama(base_url: str = OLLAMA_BASE_URL) -> None:
         response = httpx.get(f"{base_url}/api/tags", timeout=2.0)
         response.raise_for_status()
     except Exception as exc:
+        logger.error("Ollama health check failed at %s: %s", base_url, exc)
         raise OllamaNotAvailableError(
             "Cannot reach Ollama at "
             f"{base_url}. Install it from https://ollama.com/download, "
             "start the app, then run:\n"
-            "  ollama pull qwen2.5:3b\n"
-            "  ollama pull nomic-embed-text"
+            f"  ollama pull {CHAT_MODEL}\n"
+            f"  ollama pull {EMBEDDING_MODEL}"
         ) from exc
+    logger.info("Ollama reachable at %s", base_url)
 
 
-def build_agent(model_name: str = CHAT_MODEL):
-    model = ChatOllama(model=model_name, temperature=0)
+def build_agent(
+    model_name: str = CHAT_MODEL,
+    temperature: float = DEFAULT_TEMPERATURE,
+) -> Any:
+    """Build a LangChain agent with review tools."""
+    logger.info(
+        "Building agent model=%s temperature=%s", model_name, temperature
+    )
+    model = ChatOllama(model=model_name, temperature=temperature)
     return create_agent(
         model=model,
         tools=[search_reviews, filter_reviews_by_rating, get_rating_stats],
@@ -92,7 +108,7 @@ def message_text(content: Any) -> str:
     return str(content)
 
 
-def tool_trace(history: list, start_index: int = 0) -> list[str]:
+def tool_trace(history: list[Any], start_index: int = 0) -> list[str]:
     """Summarize tool calls from new messages in the agent history."""
     lines: list[str] = []
     for message in history[start_index:]:
@@ -112,7 +128,9 @@ def tool_trace(history: list, start_index: int = 0) -> list[str]:
     return lines
 
 
-def run_turn(agent, history: list, question: str) -> tuple[list, str, list[str]]:
+def run_turn(
+    agent: Any, history: list[Any], question: str
+) -> tuple[list[Any], str, list[str]]:
     """Append a user question, invoke the agent, return history + answer + tool trace."""
     history = list(history)
     start_index = len(history)
@@ -120,6 +138,7 @@ def run_turn(agent, history: list, question: str) -> tuple[list, str, list[str]]
     try:
         result = agent.invoke({"messages": history})
     except httpx.ConnectError as exc:
+        logger.error("Lost Ollama connection during turn: %s", exc)
         raise OllamaNotAvailableError(
             "Lost connection to Ollama while generating a reply. "
             "Make sure the Ollama app is running."
@@ -129,12 +148,12 @@ def run_turn(agent, history: list, question: str) -> tuple[list, str, list[str]]
     answer = message_text(history[-1].content)
     trace = tool_trace(history, start_index=start_index)
 
-    print(f"\n[agent] Q: {question}")
+    logger.info("Q: %s", question)
     if trace:
         for line in trace:
-            print(f"[agent] {line}")
+            logger.info("%s", line)
     else:
-        print("[agent] No tools used (answered directly)")
-    print(f"[agent] A: {answer[:200]}{'...' if len(answer) > 200 else ''}\n")
+        logger.info("No tools used (answered directly)")
+    logger.info("A: %s", answer[:200] + ("..." if len(answer) > 200 else ""))
 
     return history, answer, trace

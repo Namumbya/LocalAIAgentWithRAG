@@ -1,13 +1,18 @@
-"""Tools the restaurant agent can call."""
+"""Tools the review agent can call."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain.tools import tool
 
+from logging_setup import get_logger
 from vector import get_df, get_retriever
 
+logger = get_logger(__name__)
 
-def _format_review_row(row) -> str:
+
+def _format_review_row(row: Any) -> str:
     return (
         f"Title: {row['Title']}\n"
         f"Date: {row['Date']}\n"
@@ -19,6 +24,7 @@ def _format_review_row(row) -> str:
 @tool
 def search_reviews(query: str) -> str:
     """Search customer reviews by meaning. Use for questions about food, service, vibe, or specific topics."""
+    logger.info("tool search_reviews query=%r", query)
     docs = get_retriever().invoke(query)
     if not docs:
         return "No matching reviews found."
@@ -36,6 +42,9 @@ def search_reviews(query: str) -> str:
 @tool
 def filter_reviews_by_rating(min_rating: int, max_rating: int = 5) -> str:
     """Filter reviews by star rating inclusive. Use for complaints (1-2), mixed (3), or praise (4-5)."""
+    logger.info(
+        "tool filter_reviews_by_rating min=%s max=%s", min_rating, max_rating
+    )
     if min_rating > max_rating:
         return "min_rating must be less than or equal to max_rating."
 
@@ -59,6 +68,7 @@ def filter_reviews_by_rating(min_rating: int, max_rating: int = 5) -> str:
 @tool
 def get_rating_stats() -> str:
     """Return overall rating counts and average score from all reviews."""
+    logger.info("tool get_rating_stats")
     reviews = get_df()
     counts = reviews["Rating"].value_counts().sort_index()
     average = reviews["Rating"].mean()

@@ -33,3 +33,14 @@ def test_documents_from_df_builds_metadata(sample_reviews: pd.DataFrame):
         "title": "Great crust",
     }
     assert ids[1] == "1"
+
+
+def test_load_reviews_rejects_missing_columns(tmp_path: Path):
+    bad = tmp_path / "bad.csv"
+    bad.write_text("Title,Review\nHello,World\n", encoding="utf-8")
+
+    try:
+        load_reviews(bad)
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "missing required columns" in str(exc)

@@ -1,18 +1,20 @@
 # Local AI Agent with RAG
 
-A **local** restaurant-ops assistant built with **LangChain v1**, **Ollama**, and **Chroma**.
+A **local agentic RAG** demo built with **LangChain v1**, **Ollama**, and **Chroma**.
 
-Unlike a basic retrieve-then-answer RAG script, this project is an **agent**: the model decides when to search reviews, filter by rating, or pull stats before answering.
+Unlike a basic retrieve-then-answer script, this project is an **agent**: the model decides when to search reviews, filter by rating, or pull stats before answering.
 
 Everything runs on your machine. No cloud LLM API keys required.
 
+The shipped sample domain is **restaurant reviews** (pizza CSV). The same pattern works for any review CSV with columns `Title`, `Date`, `Rating`, `Review` — point `CSV_PATH` (and related settings) in [`constants.py`](constants.py).
+
 ## What it solves
 
-**Problem:** A pizza restaurant owner has a pile of customer reviews and wants quick answers like:
+**Problem:** You have a pile of customer reviews and want grounded answers like:
 
-- What do people say about the gluten-free crust?
+- What do people say about a specific topic?
 - What are the main 1–2 star complaints?
-- Draft a short reply to customers upset about late delivery.
+- Draft a short owner reply about a recurring issue (e.g. late delivery).
 
 **Approach:** Index reviews in a local vector DB, then give the agent tools so it can look things up only when needed.
 
@@ -34,11 +36,13 @@ User question
 
 | File | Role |
 | --- | --- |
+| `constants.py` | Models, paths, temperature, retriever `k` |
 | `app.py` | Streamlit chat UI |
 | `main.py` | CLI chat loop |
 | `agent.py` | LangChain v1 agent + Ollama checks |
 | `tools.py` | Agent tools (search / filter / stats) |
 | `vector.py` | Load CSV, embed, persist Chroma |
+| `logging_setup.py` | Console + file logging |
 | `realistic_restaurant_reviews.csv` | Sample review dataset |
 
 ## Prerequisites
@@ -49,13 +53,13 @@ User question
 4. Pull the local models (lightweight defaults for limited disk):
 
 ```bash
-ollama pull qwen2.5:3b
+ollama pull qwen2.5:0.5b
 ollama pull nomic-embed-text
 ```
 
-Rough sizes: `qwen2.5:3b` ~2 GB, `nomic-embed-text` ~274 MB.
+Rough sizes: `qwen2.5:0.5b` ~397 MB, `nomic-embed-text` ~274 MB.
 
-If you have more space and want stronger tool calling, use `qwen2.5` and `mxbai-embed-large`, then update `CHAT_MODEL` in `agent.py` and `EMBEDDING_MODEL` in `vector.py`. After changing the embedding model, delete `chroma_langchain_db/` so it re-indexes.
+If you have more RAM/disk and want stronger tool calling, raise `CHAT_MODEL` in `constants.py` to `qwen2.5:1.5b` / `qwen2.5:3b` / `qwen2.5`, and optionally `EMBEDDING_MODEL = "mxbai-embed-large"`. After changing the embedding model, delete `chroma_langchain_db/` (or use **Reindex reviews** in the Streamlit sidebar) so it re-indexes.
 
 ## Setup
 
@@ -84,16 +88,7 @@ First run indexes the CSV into `chroma_langchain_db/`. Later runs reuse that fol
 
 If you see a connection error, Ollama is not running. Install it, open the app, then pull the models above.
 
-## Tests
-
-```bash
-uv sync --group dev
-uv run pytest
-```
-
-Tests mock Ollama/Chroma so they run offline.
-
-Example prompts:
+### Example prompts
 
 ```text
 Hi
@@ -103,6 +98,26 @@ Summarize the rating distribution
 Draft an owner reply about late delivery issues
 ```
 
+Sidebar controls: response temperature, retriever `k`, clear chat, and reindex.
+
+## Tests and quality checks
+
+```bash
+uv sync --group dev
+uv run pytest
+uv run ruff check .
+uv run mypy
+```
+
+Tests mock Ollama/Chroma so they run offline. CI runs the same checks on every push.
+
+## Reuse on your own reviews
+
+1. Export a CSV with columns `Title`, `Date`, `Rating`, `Review`.
+2. Set `CSV_PATH` (and optionally `COLLECTION_NAME` / `DB_LOCATION`) in `constants.py`.
+3. Reindex (sidebar button or delete `chroma_langchain_db/`).
+4. Adjust `SYSTEM_PROMPT` in `agent.py` if the domain wording should change.
+
 ## Stack
 
 - LangChain `1.x` (`create_agent`, `@tool`)
@@ -110,3 +125,4 @@ Draft an owner reply about late delivery issues
 - `langchain-chroma` (persistent local vector store)
 - Streamlit (chat UI)
 - pandas (CSV + rating filters)
+- Ruff + mypy (dev)

@@ -12,6 +12,10 @@ __pycache__/
 chroma_langchain_db/
 chrome_langchain_db/
 
+# App logs
+logs/
+*.log
+
 # Env / OS
 .env
 .DS_Store
