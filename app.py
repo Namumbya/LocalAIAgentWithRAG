@@ -36,7 +36,7 @@ st.caption(
 )
 
 EXAMPLE_PROMPTS = [
-    "Should I order the BBQ chicken pizza?",
+    "Should I order the pepperoni pizza?",
     "What are the worst complaints?",
     "Summarize the rating distribution",
     "Draft an owner reply about late delivery",

@@ -44,6 +44,7 @@ files = [
     "constants.py",
     "logging_setup.py",
     "agent.py",
+    "guardrails.py",
     "vector.py",
     "tools.py",
     "main.py",

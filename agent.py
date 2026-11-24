@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_ollama import ChatOllama
 
+import guardrails as g
 from constants import (
     CHAT_MODEL,
     DEFAULT_TEMPERATURE,
@@ -34,7 +35,6 @@ _REVIEW_HINTS = (
     "reply",
     "owner",
     "vegan",
-    "bbq",
     "worst",
     "stats",
     "distribution",
@@ -51,7 +51,7 @@ The sample dataset is pizza restaurant reviews, but answer from whatever
 reviews are indexed.
 
 Tools (use exact argument names only):
-- search_reviews(query): semantic search for a topic (BBQ, vegan, delivery, crust, etc.)
+- search_reviews(query): semantic search for a topic (pepperoni, vegan, delivery, crust, etc.)
 - filter_reviews_by_rating(min_rating, max_rating): filter by stars only. No topic argument.
 - get_rating_stats(): overall counts/average/distribution only
 
@@ -66,6 +66,7 @@ Tool choice (follow strictly):
 Answer style:
 - Normal questions: answer helpfully in plain chat. Cite 1-3 review points from tool results.
 - "Should I order...?" -> after search_reviews, give a short yes/no/mixed recommendation using only those results.
+- If the search results are not actually about the item asked about, say the reviews do not cover it. Never recommend an item no review mentions.
 - ONLY when the user asks to draft/write an owner reply/letter/email: output this format
   (after searching first):
 
@@ -87,6 +88,8 @@ Other rules:
 - Be clear and practical
 """
 
+Evidence = tuple[str, dict[str, Any], str]  # (tool_name, args, result)
+
 
 class OllamaNotAvailableError(RuntimeError):
     """Raised when the local Ollama server cannot be reached."""
@@ -103,14 +106,6 @@ def _needs_review_tools(text: str) -> bool:
     if not cleaned or cleaned in _GREETINGS:
         return False
     return any(hint in cleaned for hint in _REVIEW_HINTS)
-
-
-def _is_owner_reply_request(question: str) -> bool:
-    lowered = question.lower()
-    return any(
-        token in lowered
-        for token in ("draft", "owner reply", "write a reply", "letter", "email")
-    )
 
 
 def _is_follow_up(question: str) -> bool:
@@ -137,46 +132,6 @@ def _preview_text(text: str, limit: int = _PREVIEW_LIMIT) -> str:
     if len(compact) > limit:
         return compact[: limit - 3] + "..."
     return compact
-
-
-def _grounded_fallback_prompt(question: str, tool_name: str, tool_result: str) -> tuple[str, str]:
-    """Return (system_content, user_prompt) for the grounded fallback answer."""
-    if _is_owner_reply_request(question):
-        system_content = (
-            "You write finished customer apology letters. "
-            "Never leave placeholders like [issue] or [Your Name]."
-        )
-        user_prompt = (
-            "Write one finished customer apology letter from this evidence.\n"
-            f"Evidence:\n{tool_result}\n\n"
-            "Rules:\n"
-            "- Start with Dear Customer,\n"
-            "- Mention the real issue from the evidence (e.g. long wait / late delivery)\n"
-            "- Apologize for a concrete detail from the evidence\n"
-            "- Promise one specific improvement\n"
-            "- End with Best regards, then Restaurant Owner\n"
-            "- No brackets, no placeholders, no [issue] text\n\n"
-            "Example of a finished letter:\n"
-            "Dear Customer,\n\n"
-            "Thank you for sharing your experience regarding late delivery. "
-            "We apologize for the 90-minute wait on a busy night. "
-            "We are adding more drivers at peak hours to improve delivery times.\n\n"
-            "We value your feedback and hope to serve you better next time.\n\n"
-            "Best regards,\n"
-            "Restaurant Owner"
-        )
-        return system_content, user_prompt
-
-    system_content = (
-        "You answer from provided review evidence only. Be concise and practical."
-    )
-    user_prompt = (
-        f"Question: {question}\n\n"
-        f"Evidence from `{tool_name}`:\n{tool_result}\n\n"
-        "Answer using ONLY this evidence. Do not invent reviews. "
-        "Give a short practical recommendation."
-    )
-    return system_content, user_prompt
 
 
 def check_ollama(base_url: str = OLLAMA_BASE_URL) -> None:
@@ -247,29 +202,122 @@ def tool_trace(history: list[Any], start_index: int = 0) -> list[str]:
     return lines
 
 
-def _fallback_tool_for_question(question: str) -> tuple[str, dict[str, Any], str]:
-    """Pick a deterministic tool when the model skips tool calling."""
+def _fallback_tool_for_question(question: str) -> Evidence:
+    """Run the right tool with the right arguments for a question, deterministically."""
     args: dict[str, Any]
+    intent = g.classify_intent(question)
     lowered = question.lower()
-    if any(token in lowered for token in ("worst", "complaint", "1-2", "1 star")):
+    if intent == g.COMPLAINTS:
         args = {"min_rating": 1, "max_rating": 2}
         return "filter_reviews_by_rating", args, filter_reviews_by_rating.invoke(args)
-    if any(
-        token in lowered
-        for token in ("distribution", "average rating", "rating stats", "how many stars")
-    ):
+    if intent == g.STATS:
         args = {}
         return "get_rating_stats", args, get_rating_stats.invoke(args)
 
-    query = question
-    if "late delivery" in lowered:
+    if intent == g.OWNER_REPLY:
+        query = g.issue_from_question(question)
+    elif intent == g.RECOMMEND:
+        query = g.dish_topic(question)
+    elif "late delivery" in lowered:
         query = "late delivery"
-    elif "bbq" in lowered:
-        query = "BBQ chicken pizza"
     elif "vegan" in lowered:
         query = "vegan pizza"
+    else:
+        query = question
     args = {"query": query}
     return "search_reviews", args, search_reviews.invoke(args)
+
+
+def _model_evidence(intent: str, new_messages: list[Any]) -> Evidence | None:
+    """The model's own tool call for this turn, if it is valid evidence for `intent`."""
+    results = {
+        getattr(message, "tool_call_id", ""): message_text(message.content)
+        for message in new_messages
+        if _message_role(message) == "tool"
+    }
+    for message in new_messages:
+        for call in getattr(message, "tool_calls", None) or []:
+            name = str(call.get("name", ""))
+            args = dict(call.get("args") or {})
+            call_id = call.get("id", "")
+            if call_id in results and g.evidence_fits_intent(intent, name, args):
+                return name, args, results[call_id]
+    return None
+
+
+def _ask_model(
+    prompt: tuple[str, str], *, model_name: str, temperature: float, base_url: str
+) -> str:
+    system_content, user_content = prompt
+    try:
+        answerer = ChatOllama(model=model_name, temperature=temperature, base_url=base_url)
+        reply = answerer.invoke(
+            [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
+            ]
+        )
+    except httpx.ConnectError as exc:
+        logger.error("Lost Ollama connection while writing an answer: %s", exc)
+        raise OllamaNotAvailableError(
+            "Lost connection to Ollama while generating a reply. "
+            "Make sure the Ollama app is running."
+        ) from exc
+    return message_text(reply.content)
+
+
+def _compose_answer(
+    intent: str | None,
+    question: str,
+    evidence: Evidence,
+    *,
+    model_name: str,
+    temperature: float,
+    base_url: str,
+) -> str:
+    """Build the answer from evidence; the model only fills short free-text parts."""
+    tool_name, tool_args, tool_result = evidence
+
+    def ask(prompt: tuple[str, str]) -> str:
+        return _ask_model(
+            prompt, model_name=model_name, temperature=temperature, base_url=base_url
+        )
+
+    if intent == g.STATS:
+        return g.stats_answer(tool_result)
+    if intent == g.COMPLAINTS:
+        return g.complaints_answer(ask(g.complaints_prompt(tool_result)), tool_result)
+    if intent == g.OWNER_REPLY:
+        issue = g.issue_from_question(question)
+        return g.letter_answer(issue, ask(g.letter_prompt(issue, tool_result)))
+    if intent == g.RECOMMEND:
+        topic = g.dish_topic(question) or str(tool_args.get("query", ""))
+        missing = g.missing_topic_answer(topic, tool_result)
+        if missing is not None:
+            logger.info("Search results do not mention %r; not asking the model", topic)
+            return missing
+        reviews = g.relevant_reviews(topic, tool_result)
+        summary = ask(g.recommendation_prompt(topic, reviews)) if reviews else ""
+        if not reviews:
+            # Unparseable evidence: fall back to a plain grounded answer.
+            summary = ask(g.general_prompt(question, tool_name, tool_result))
+        return g.recommendation_answer(topic, reviews, summary)
+    return ask(g.general_prompt(question, tool_name, tool_result))
+
+
+def _with_evidence(history: list[Any], user_index: int, evidence: Evidence, answer: str) -> list[Any]:
+    """History up to the user message, then the evidence as a real tool call, then the answer."""
+    tool_name, tool_args, tool_result = evidence
+    call_id = f"call-{uuid.uuid4().hex[:12]}"
+    return [
+        *history[: user_index + 1],
+        AIMessage(
+            content="",
+            tool_calls=[{"name": tool_name, "args": tool_args, "id": call_id, "type": "tool_call"}],
+        ),
+        ToolMessage(content=tool_result, tool_call_id=call_id, name=tool_name),
+        AIMessage(content=answer),
+    ]
 
 
 def run_turn(
@@ -281,9 +329,15 @@ def run_turn(
     temperature: float = DEFAULT_TEMPERATURE,
     base_url: str = OLLAMA_BASE_URL,
 ) -> tuple[list[Any], str, list[str]]:
-    """Append a user question, invoke the agent, return history + answer + tool trace."""
+    """Append a user question, invoke the agent, return history + answer + tool trace.
+
+    The agent runs first. For the question types in `guardrails` the code then
+    checks that the model used valid evidence (re-running the right tool if
+    not) and builds the answer around it. Other review questions where the
+    model skipped tools get one grounded retry.
+    """
     history = list(history)
-    start_index = len(history)
+    user_index = len(history)
     prior_history = list(history)
     history.append({"role": "user", "content": question})
     try:
@@ -297,68 +351,39 @@ def run_turn(
 
     history = result["messages"]
     answer = message_text(history[-1].content)
-    trace = tool_trace(history, start_index=start_index)
+    trace = tool_trace(history, start_index=user_index)
+    new_messages = history[user_index + 1 :]
 
-    # Small local models sometimes skip tools and invent answers. Recover once,
-    # unless this is a follow-up that can reuse the previous turn's evidence.
-    reuses_evidence = _is_follow_up(question) and _last_turn_has_tool_evidence(
-        prior_history
-    )
-    if not trace and _needs_review_tools(question) and not reuses_evidence:
-        try:
-            tool_name, tool_args, tool_result = _fallback_tool_for_question(question)
-        except Exception as exc:
-            logger.exception("Fallback tool failed")
-            raise RuntimeError(
-                f"Could not retrieve reviews for fallback answering: {exc}"
-            ) from exc
+    # A follow-up ("draft a reply about that") can rely on last turn's evidence.
+    reuses_evidence = _is_follow_up(question) and _last_turn_has_tool_evidence(prior_history)
+    intent = None if reuses_evidence else g.classify_intent(question)
+    needs_retry = not trace and _needs_review_tools(question) and not reuses_evidence
 
-        logger.warning(
-            "Model skipped tools; fallback %s with %s", tool_name, tool_args
-        )
-        system_content, grounded_prompt = _grounded_fallback_prompt(
-            question, tool_name, tool_result
-        )
-        try:
-            answerer = ChatOllama(
-                model=model_name,
-                temperature=temperature,
-                base_url=base_url,
-            )
-            grounded = answerer.invoke(
-                [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": grounded_prompt},
-                ]
-            )
-        except httpx.ConnectError as exc:
-            logger.error("Lost Ollama connection during fallback turn: %s", exc)
-            raise OllamaNotAvailableError(
-                "Lost connection to Ollama while generating a reply. "
-                "Make sure the Ollama app is running."
-            ) from exc
-
-        answer = message_text(grounded.content)
-        # Drop the ungrounded reply and record the fallback as a real tool call,
-        # so follow-ups see standard tool messages rather than imitable text.
-        call_id = f"fallback-{uuid.uuid4().hex[:12]}"
-        history = list(history[:-1])
-        history.extend(
-            [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {"name": tool_name, "args": tool_args, "id": call_id, "type": "tool_call"}
-                    ],
-                ),
-                ToolMessage(content=tool_result, tool_call_id=call_id, name=tool_name),
-                AIMessage(content=answer),
+    if intent is not None or needs_retry:
+        evidence = _model_evidence(intent, new_messages) if intent is not None else None
+        if evidence is None:
+            try:
+                evidence = _fallback_tool_for_question(question)
+            except Exception as exc:
+                logger.exception("Guardrail tool call failed")
+                raise RuntimeError(f"Could not retrieve reviews: {exc}") from exc
+            tool_name, tool_args, tool_result = evidence
+            reason = "model skipped tools" if not trace else "model's tool call did not fit"
+            logger.warning("Guardrail (%s): %s with %s", reason, tool_name, tool_args)
+            trace = [
+                *trace,
+                f"Called `{tool_name}` with {tool_args} (guardrail: {reason})",
+                f"`{tool_name}` returned: {_preview_text(tool_result)}",
             ]
+        answer = _compose_answer(
+            intent,
+            question,
+            evidence,
+            model_name=model_name,
+            temperature=temperature,
+            base_url=base_url,
         )
-        trace = [
-            f"Called `{tool_name}` with {tool_args} (fallback)",
-            f"`{tool_name}` returned: {_preview_text(tool_result)}",
-        ]
+        history = _with_evidence(history, user_index, evidence, answer)
 
     logger.info("Q: %s", question)
     if trace:

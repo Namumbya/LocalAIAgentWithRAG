@@ -31,15 +31,21 @@ User question
         search_reviews
         filter_reviews_by_rating
         get_rating_stats
+   -> guardrails (known question types)
+        check the model's tool call; re-run the right tool if it was wrong or skipped
+        build fixed answer parts in code (letter frame, stats, citations, verdict)
    -> grounded answer
 ```
+
+**Why guardrails?** Small local models (the default is `qwen2.5:0.5b`) often skip tools, pick wrong arguments (e.g. ratings 1–5 for "worst complaints"), or copy prompt examples. For complaints, rating stats, "should I order X?" and owner replies, [`guardrails.py`](guardrails.py) validates the evidence and assembles the answer, so the model only writes short free-text parts. It also refuses to recommend a dish no review mentions. Other questions go to the agent unchanged. The **Tool activity** panel in the UI marks any step the guardrail took.
 
 | File | Role |
 | --- | --- |
 | `constants.py` | Models, paths, temperature, retriever `k` |
 | `app.py` | Streamlit chat UI |
 | `main.py` | CLI chat loop |
-| `agent.py` | LangChain v1 agent + Ollama checks |
+| `agent.py` | LangChain v1 agent, guarded turn loop, Ollama checks |
+| `guardrails.py` | Question types, evidence checks, answer builders |
 | `tools.py` | Agent tools (search / filter / stats) |
 | `vector.py` | Load CSV, embed, persist Chroma |
 | `logging_setup.py` | Console + file logging |
