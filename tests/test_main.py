@@ -10,15 +10,17 @@ def test_build_agent_wires_tools(monkeypatch):
     fake_model = object()
     captured = {}
 
-    def fake_chat_ollama(*, model, temperature):
+    def fake_chat_ollama(*, model, temperature, base_url=None):
         captured["model"] = model
         captured["temperature"] = temperature
+        captured["base_url"] = base_url
         return fake_model
 
-    def fake_create_agent(*, model, tools, system_prompt):
+    def fake_create_agent(*, model, tools, system_prompt, middleware=None):
         captured["agent_model"] = model
         captured["tools"] = tools
         captured["system_prompt"] = system_prompt
+        captured["middleware"] = middleware
         return MagicMock(name="agent")
 
     monkeypatch.setattr(agent, "ChatOllama", fake_chat_ollama)
@@ -29,8 +31,10 @@ def test_build_agent_wires_tools(monkeypatch):
     assert built is not None
     assert captured["model"] == "qwen2.5:3b"
     assert captured["temperature"] == 0.0
+    assert captured["base_url"] == agent.OLLAMA_BASE_URL
     assert captured["agent_model"] is fake_model
     assert len(captured["tools"]) == 3
+    assert captured["middleware"] is None
     assert "search_reviews" in captured["system_prompt"]
     assert "Dear Customer" in captured["system_prompt"]
 
@@ -38,6 +42,48 @@ def test_build_agent_wires_tools(monkeypatch):
 def test_message_text_handles_string_and_blocks():
     assert agent.message_text("hello") == "hello"
     assert agent.message_text([{"type": "text", "text": "hi"}, " there"]) == "hi\n there"
+
+
+def test_needs_review_tools():
+    assert agent._needs_review_tools("Should I order the BBQ chicken pizza?")
+    assert agent._needs_review_tools("What are the worst complaints?")
+    assert not agent._needs_review_tools("Hi")
+    assert not agent._needs_review_tools("thanks")
+
+
+def test_fallback_tool_for_question_routes(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "filter_reviews_by_rating",
+        MagicMock(invoke=MagicMock(return_value="low ratings")),
+    )
+    monkeypatch.setattr(
+        agent,
+        "get_rating_stats",
+        MagicMock(invoke=MagicMock(return_value="stats")),
+    )
+    monkeypatch.setattr(
+        agent,
+        "search_reviews",
+        MagicMock(invoke=MagicMock(return_value="search hits")),
+    )
+
+    name, args, result = agent._fallback_tool_for_question("What are the worst complaints?")
+    assert name == "filter_reviews_by_rating"
+    assert args == {"min_rating": 1, "max_rating": 2}
+    assert result == "low ratings"
+
+    name, args, result = agent._fallback_tool_for_question("Summarize the rating distribution")
+    assert name == "get_rating_stats"
+    assert args == {}
+    assert result == "stats"
+
+    name, args, result = agent._fallback_tool_for_question(
+        "Should I order the BBQ chicken pizza?"
+    )
+    assert name == "search_reviews"
+    assert args == {"query": "BBQ chicken pizza"}
+    assert result == "search hits"
 
 
 def test_run_turn_updates_history(monkeypatch):
@@ -59,6 +105,91 @@ def test_run_turn_updates_history(monkeypatch):
     assert trace == []
     assert len(history) == 2
     fake_agent.invoke.assert_called_once()
+
+
+def test_run_turn_fallback_replaces_ungrounded_answer(monkeypatch):
+    class FakeMessage:
+        def __init__(self, content):
+            self.content = content
+
+    fake_agent = MagicMock()
+    fake_agent.invoke.return_value = {
+        "messages": [
+            {"role": "user", "content": "Should I order the BBQ chicken pizza?"},
+            FakeMessage("Invented praise with no tools."),
+        ]
+    }
+
+    monkeypatch.setattr(
+        agent,
+        "_fallback_tool_for_question",
+        lambda question: (
+            "search_reviews",
+            {"query": "BBQ chicken pizza"},
+            "[1] Rating: 5/5 BBQ is great",
+        ),
+    )
+
+    fake_answerer = MagicMock()
+    fake_answerer.invoke.return_value = FakeMessage("Yes, order it.")
+
+    def fake_chat_ollama(*, model, temperature, base_url=None):
+        assert model == "test-model"
+        assert temperature == 0.3
+        assert base_url == agent.OLLAMA_BASE_URL
+        return fake_answerer
+
+    monkeypatch.setattr(agent, "ChatOllama", fake_chat_ollama)
+
+    history, answer, trace = agent.run_turn(
+        fake_agent,
+        [],
+        "Should I order the BBQ chicken pizza?",
+        model_name="test-model",
+        temperature=0.3,
+    )
+
+    assert answer == "Yes, order it."
+    assert "fallback" in trace[0]
+    assert history[-1] == {"role": "assistant", "content": "Yes, order it."}
+    assert history[-2]["content"].startswith("Tool result (search_reviews")
+    assert "Invented praise" not in str(history)
+
+
+def test_run_turn_skips_fallback_when_prior_tool_evidence_exists(monkeypatch):
+    class FakeMessage:
+        def __init__(self, content):
+            self.content = content
+
+    prior = [
+        {"role": "user", "content": "What are the worst complaints?"},
+        {
+            "role": "assistant",
+            "content": "Tool result (filter_reviews_by_rating {'min_rating': 1}):\nlate delivery",
+        },
+        {"role": "assistant", "content": "Main complaints are late delivery."},
+    ]
+    fake_agent = MagicMock()
+    fake_agent.invoke.return_value = {
+        "messages": prior
+        + [
+            {"role": "user", "content": "Draft a reply about that"},
+            FakeMessage("Dear Customer, sorry about late delivery."),
+        ]
+    }
+    fallback = MagicMock(
+        side_effect=AssertionError("fallback should not run with prior evidence")
+    )
+    monkeypatch.setattr(agent, "_fallback_tool_for_question", fallback)
+
+    history, answer, trace = agent.run_turn(
+        fake_agent, prior, "Draft a reply about that"
+    )
+
+    assert answer == "Dear Customer, sorry about late delivery."
+    assert trace == []
+    fallback.assert_not_called()
+    assert history[-1].content == "Dear Customer, sorry about late delivery."
 
 
 def test_tool_trace_from_tool_calls():

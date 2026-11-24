@@ -128,13 +128,17 @@ if prompt:
     with st.spinner("Thinking with local tools..."):
         try:
             history, answer, trace = run_turn(
-                agent, st.session_state.agent_history, prompt
+                agent,
+                st.session_state.agent_history,
+                prompt,
+                model_name=CHAT_MODEL,
+                temperature=temperature,
             )
             st.session_state.agent_history = history
             st.session_state.messages.append(
                 {"role": "assistant", "content": answer, "trace": trace}
             )
-        except OllamaNotAvailableError as exc:
+        except (OllamaNotAvailableError, RuntimeError) as exc:
             st.session_state.messages.append(
                 {"role": "assistant", "content": str(exc), "trace": []}
             )

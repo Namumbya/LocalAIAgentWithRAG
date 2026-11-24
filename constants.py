@@ -12,8 +12,8 @@ from pathlib import Path
 # Change these
 ##############################################################################
 
-# Lightweight defaults for limited disk/RAM (~0.7 GB models total).
-# Stronger when you have headroom: "qwen2.5:1.5b", "qwen2.5:3b", or "qwen2.5" + "mxbai-embed-large"
+# Default for limited disk/RAM. On this stack, 0.5b tool-calls more reliably than 1.5b.
+# Stronger when you have headroom: "qwen2.5:3b" or "qwen2.5" + "mxbai-embed-large"
 CHAT_MODEL = "qwen2.5:0.5b"
 EMBEDDING_MODEL = "nomic-embed-text"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"

@@ -36,8 +36,16 @@ def main() -> None:
             continue
 
         try:
-            messages, answer, _trace = run_turn(agent, messages, question)
-        except OllamaNotAvailableError as exc:
+            messages, answer, _trace = run_turn(
+                agent,
+                messages,
+                question,
+                model_name=CHAT_MODEL,
+            )
+        except (OllamaNotAvailableError, RuntimeError, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                print("\nBye.\n")
+                break
             print(f"\n{exc}\n")
             continue
 

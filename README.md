@@ -59,7 +59,7 @@ ollama pull nomic-embed-text
 
 Rough sizes: `qwen2.5:0.5b` ~397 MB, `nomic-embed-text` ~274 MB.
 
-If you have more RAM/disk and want stronger tool calling, raise `CHAT_MODEL` in `constants.py` to `qwen2.5:1.5b` / `qwen2.5:3b` / `qwen2.5`, and optionally `EMBEDDING_MODEL = "mxbai-embed-large"`. After changing the embedding model, delete `chroma_langchain_db/` (or use **Reindex reviews** in the Streamlit sidebar) so it re-indexes.
+For stronger answers when you have RAM/disk, try `CHAT_MODEL = "qwen2.5:3b"` or `qwen2.5` in `constants.py` (note: some mid-size local models tool-call less reliably than 0.5b). Optionally set `EMBEDDING_MODEL = "mxbai-embed-large"`. After changing the embedding model, delete `chroma_langchain_db/` (or use **Reindex reviews** in the Streamlit sidebar) so it re-indexes.
 
 ## Setup
 
