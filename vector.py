@@ -17,6 +17,7 @@ from constants import (
     DB_LOCATION,
     DEFAULT_RETRIEVER_K,
     EMBEDDING_MODEL,
+    OLLAMA_BASE_URL,
     REQUIRED_CSV_COLUMNS,
 )
 from logging_setup import get_logger
@@ -68,10 +69,11 @@ def build_vector_store(
     persist_directory: Path | str = DB_LOCATION,
     embedding_model: str = EMBEDDING_MODEL,
     collection_name: str = COLLECTION_NAME,
+    base_url: str = OLLAMA_BASE_URL,
 ) -> Chroma:
     """Create or load a Chroma store and index reviews when empty."""
     reviews = reviews if reviews is not None else load_reviews()
-    embeddings = OllamaEmbeddings(model=embedding_model)
+    embeddings = OllamaEmbeddings(model=embedding_model, base_url=base_url)
     persist_directory = Path(persist_directory)
 
     vector_store = Chroma(

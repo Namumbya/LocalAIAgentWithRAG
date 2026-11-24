@@ -29,23 +29,22 @@ def main() -> None:
     logger.info("CLI agent ready")
 
     while True:
-        question = input("You: ").strip()
+        try:
+            question = input("You: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nBye.")
+            break
         if question.lower() in {"q", "quit", "exit"}:
             break
         if not question:
             continue
 
         try:
-            messages, answer, _trace = run_turn(
-                agent,
-                messages,
-                question,
-                model_name=CHAT_MODEL,
-            )
-        except (OllamaNotAvailableError, RuntimeError, KeyboardInterrupt) as exc:
-            if isinstance(exc, KeyboardInterrupt):
-                print("\nBye.\n")
-                break
+            messages, answer, _trace = run_turn(agent, messages, question)
+        except KeyboardInterrupt:
+            print("\nBye.")
+            break
+        except RuntimeError as exc:  # includes OllamaNotAvailableError
             print(f"\n{exc}\n")
             continue
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from typing import Any
 
 import httpx
 from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_ollama import ChatOllama
 
 from constants import (
@@ -39,6 +42,9 @@ _REVIEW_HINTS = (
     "late",
 )
 _PREVIEW_LIMIT = 120
+_FOLLOW_UP_PATTERN = re.compile(
+    r"\b(that|this|those|these|it|them|above|same|previous)\b", re.IGNORECASE
+)
 
 SYSTEM_PROMPT = """You are a local customer-review operations assistant.
 The sample dataset is pizza restaurant reviews, but answer from whatever
@@ -92,12 +98,6 @@ def _message_role(message: Any) -> str:
     return str(getattr(message, "type", "") or getattr(message, "role", ""))
 
 
-def _message_content(message: Any) -> Any:
-    if isinstance(message, dict):
-        return message.get("content", "")
-    return getattr(message, "content", "")
-
-
 def _needs_review_tools(text: str) -> bool:
     cleaned = " ".join(text.lower().strip().split())
     if not cleaned or cleaned in _GREETINGS:
@@ -113,18 +113,23 @@ def _is_owner_reply_request(question: str) -> bool:
     )
 
 
-def _history_has_tool_evidence(messages: list[Any]) -> bool:
-    """True if earlier turns already retrieved tool evidence."""
-    for message in messages:
-        role = _message_role(message)
-        if role == "tool":
-            return True
-        if getattr(message, "tool_calls", None):
-            return True
-        content = message_text(_message_content(message))
-        if content.startswith("Tool result ("):
-            return True
-    return False
+def _is_follow_up(question: str) -> bool:
+    """True if the question refers back to the previous answer ("draft a reply about that")."""
+    return _FOLLOW_UP_PATTERN.search(question) is not None
+
+
+def _last_turn_has_tool_evidence(messages: list[Any]) -> bool:
+    """True if the most recent completed turn retrieved tool evidence."""
+    last_user = -1
+    for index, message in enumerate(messages):
+        if _message_role(message) in {"human", "user"}:
+            last_user = index
+    if last_user < 0:
+        return False
+    return any(
+        _message_role(message) == "tool" or getattr(message, "tool_calls", None)
+        for message in messages[last_user + 1 :]
+    )
 
 
 def _preview_text(text: str, limit: int = _PREVIEW_LIMIT) -> str:
@@ -295,12 +300,11 @@ def run_turn(
     trace = tool_trace(history, start_index=start_index)
 
     # Small local models sometimes skip tools and invent answers. Recover once,
-    # but only when earlier turns have no tool evidence to reuse.
-    if (
-        not trace
-        and _needs_review_tools(question)
-        and not _history_has_tool_evidence(prior_history)
-    ):
+    # unless this is a follow-up that can reuse the previous turn's evidence.
+    reuses_evidence = _is_follow_up(question) and _last_turn_has_tool_evidence(
+        prior_history
+    )
+    if not trace and _needs_review_tools(question) and not reuses_evidence:
         try:
             tool_name, tool_args, tool_result = _fallback_tool_for_question(question)
         except Exception as exc:
@@ -335,15 +339,22 @@ def run_turn(
             ) from exc
 
         answer = message_text(grounded.content)
-        # Drop the ungrounded assistant reply and keep tool evidence for follow-ups.
+        # Drop the ungrounded reply and record the fallback as a real tool call,
+        # so follow-ups see standard tool messages rather than imitable text.
+        call_id = f"fallback-{uuid.uuid4().hex[:12]}"
         history = list(history[:-1])
-        history.append(
-            {
-                "role": "assistant",
-                "content": f"Tool result ({tool_name} {tool_args}):\n{tool_result}",
-            }
+        history.extend(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": tool_name, "args": tool_args, "id": call_id, "type": "tool_call"}
+                    ],
+                ),
+                ToolMessage(content=tool_result, tool_call_id=call_id, name=tool_name),
+                AIMessage(content=answer),
+            ]
         )
-        history.append({"role": "assistant", "content": answer})
         trace = [
             f"Called `{tool_name}` with {tool_args} (fallback)",
             f"`{tool_name}` returned: {_preview_text(tool_result)}",
